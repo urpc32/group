@@ -1,99 +1,50 @@
-// api/transfer.js - Vercel Serverless API Route for Roblox Group Ownership Transfer
-// Deploy this as a Vercel project. Ensure you have a GitHub repo with this file in /api/transfer.js.
-// Usage: POST to https://your-vercel-app.vercel.app/api/transfer
-// Body: { groupId: number, newOwnerId: number, cookie: string }
-// Requires ROBLOX_TRANSFER_API_KEY environment variable set in Vercel dashboard.
+// api/transfer.js  ← Single file, Vercel-ready. POST { groupId, newOwnerId, cookie: ".ROBLOSECURITY=..." }
 
-import { NextRequest, NextResponse } from 'next/server';
+export default async function handler(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
-export async function POST(request) {
+  const { groupId, newOwnerId, cookie } = req.body;
+  if (!groupId || !newOwnerId || !cookie) return res.status(400).json({ error: 'Need groupId, newOwnerId, cookie' });
+
   try {
-    // Parse the incoming JSON body
-    const body = await request.json();
-    const { groupId, newOwnerId, cookie } = body;
-
-    // Validate required fields
-    if (!groupId || !newOwnerId || !cookie) {
-      return NextResponse.json(
-        { error: 'Missing required fields: groupId, newOwnerId, cookie' },
-        { status: 400 }
-      );
-    }
-
-    // Fetch the Roblox CSRF token using the provided cookie
-    const cookieHeaders = {
-      Cookie: cookie,
-    };
-
-    // First, get CSRF token from auth endpoint
-    const csrfResponse = await fetch('https://auth.roblox.com/v2/logout', {
+    // Step 1: Fetch CSRF token using the cookie (logout trick—doesn't actually log out)
+    const csrfRes = await fetch('https://auth.roblox.com/v2/logout', {
       method: 'POST',
       headers: {
-        ...cookieHeaders,
+        'Cookie': cookie,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({}),
     });
 
-    if (!csrfResponse.ok) {
-      return NextResponse.json(
-        { error: 'Failed to fetch CSRF token. Check your cookie.' },
-        { status: 401 }
-      );
+    if (!csrfRes.ok) return res.status(401).json({ error: 'Invalid cookie—CSRF fetch failed' });
+
+    const csrfText = await csrfRes.text();
+    const csrfMatch = csrfText.match(/"x-csrf-token"\s*:\s*"([^"]+)"/);
+    if (!csrfMatch) return res.status(400).json({ error: 'No CSRF token in response—bad cookie?' });
+
+    const csrfToken = csrfMatch[1];
+
+    // Step 2: Transfer ownership
+    const transferRes = await fetch(`https://apis.roblox.com/groups/v1/groups/${groupId}/transfer-ownership`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-csrf-token': csrfToken,
+        'RobloxTransferApiKey': process.env.ROBLOX_TRANSFER_API_KEY,
+        'Cookie': cookie,  // Session for perms check
+      },
+      body: JSON.stringify({ newOwnerTargetId: newOwnerId }),
+    });
+
+    if (!transferRes.ok) {
+      const err = await transferRes.text();
+      return res.status(transferRes.status).json({ error: 'Transfer failed', details: err });
     }
 
-    const csrfText = await csrfResponse.text();
-    const xCsrfTokenMatch = csrfText.match(/"x-csrf-token":"([^"]+)"/);
-    if (!xCsrfTokenMatch) {
-      return NextResponse.json(
-        { error: 'CSRF token not found in response.' },
-        { status: 400 }
-      );
-    }
-    const xCsrfToken = xCsrfTokenMatch[1];
-
-    // Prepare headers for the transfer request
-    const headers = {
-      'Content-Type': 'application/json',
-      'x-csrf-token': xCsrfToken,
-      'RobloxTransferApiKey': process.env.ROBLOX_TRANSFER_API_KEY,
-      ...cookieHeaders,
-    };
-
-    // Request body for ownership transfer
-    const transferBody = {
-      newOwnerTargetId: newOwnerId,
-    };
-
-    // Make the transfer request to Roblox Open Cloud API
-    const transferResponse = await fetch(
-      `https://apis.roblox.com/groups/v1/groups/${groupId}/transfer-ownership`,
-      {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(transferBody),
-      }
-    );
-
-    if (!transferResponse.ok) {
-      const errorData = await transferResponse.text();
-      return NextResponse.json(
-        { error: 'Transfer failed', details: errorData },
-        { status: transferResponse.status }
-      );
-    }
-
-    const result = await transferResponse.json();
-
-    return NextResponse.json(
-      { success: true, data: result },
-      { status: 200 }
-    );
-  } catch (error) {
-    console.error('Transfer API error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error', details: error.message },
-      { status: 500 }
-    );
+    const data = await transferRes.json();
+    res.status(200).json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 }
