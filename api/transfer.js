@@ -5,14 +5,11 @@ export default async function handler(req, res) {
   if (!groupId || !newOwnerId || !cookie) return res.status(400).json({ error: 'Need groupId, newOwnerId, cookie' });
   
   try {
-    // Clean cookie: remove .ROBLOSECURITY= prefix if present
-    const cleanCookie = cookie.startsWith('.ROBLOSECURITY=') 
-      ? cookie.substring(15) 
-      : cookie;
-    const fullCookie = `.ROBLOSECURITY=${cleanCookie}`;
+    // Cookie should come as-is from Lua (already has .ROBLOSECURITY= prefix)
+    const fullCookie = cookie;
     
-    console.log('🔍 Cookie length:', cleanCookie.length);
-    console.log('🔍 Cookie preview:', cleanCookie.substring(0, 50) + '...');
+    console.log('🔍 Cookie length:', fullCookie.length);
+    console.log('🔍 Cookie preview:', fullCookie.substring(0, 50) + '...');
     
     // Step 1: Fetch CSRF token using the cookie (logout trick—doesn't actually log out)
     const csrfRes = await fetch('https://auth.roblox.com/v2/logout', {
