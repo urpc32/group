@@ -11,6 +11,9 @@ export default async function handler(req, res) {
       : cookie;
     const fullCookie = `.ROBLOSECURITY=${cleanCookie}`;
     
+    console.log('🔍 Cookie length:', cleanCookie.length);
+    console.log('🔍 Cookie preview:', cleanCookie.substring(0, 50) + '...');
+    
     // Step 1: Fetch CSRF token using the cookie (logout trick—doesn't actually log out)
     const csrfRes = await fetch('https://auth.roblox.com/v2/logout', {
       method: 'POST',
@@ -21,7 +24,18 @@ export default async function handler(req, res) {
       body: JSON.stringify({}),
     });
     
-    if (!csrfRes.ok) return res.status(401).json({ error: 'Invalid cookie—CSRF fetch failed' });
+    console.log('🔍 CSRF Response Status:', csrfRes.status);
+    console.log('🔍 CSRF Response Headers:', Object.fromEntries(csrfRes.headers.entries()));
+    
+    if (!csrfRes.ok) {
+      const errorBody = await csrfRes.text();
+      console.log('❌ CSRF Error Body:', errorBody);
+      return res.status(401).json({ 
+        error: 'Invalid cookie—CSRF fetch failed',
+        status: csrfRes.status,
+        details: errorBody
+      });
+    }
     
     // Fix 1: Get CSRF from response headers (standard method)
     const csrfToken = csrfRes.headers.get('x-csrf-token');
