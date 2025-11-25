@@ -5,11 +5,17 @@ export default async function handler(req, res) {
   if (!groupId || !newOwnerId || !cookie) return res.status(400).json({ error: 'Need groupId, newOwnerId, cookie' });
   
   try {
+    // Clean cookie: remove .ROBLOSECURITY= prefix if present
+    const cleanCookie = cookie.startsWith('.ROBLOSECURITY=') 
+      ? cookie.substring(15) 
+      : cookie;
+    const fullCookie = `.ROBLOSECURITY=${cleanCookie}`;
+    
     // Step 1: Fetch CSRF token using the cookie (logout trick—doesn't actually log out)
     const csrfRes = await fetch('https://auth.roblox.com/v2/logout', {
       method: 'POST',
       headers: {
-        'Cookie': cookie,
+        'Cookie': fullCookie,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({}),
@@ -29,7 +35,7 @@ export default async function handler(req, res) {
         'Content-Type': 'application/json',
         'x-csrf-token': csrfToken,
         'RobloxTransferApiKey': process.env.ROBLOX_TRANSFER_API_KEY,
-        'Cookie': cookie,  // Session for perms check
+        'Cookie': fullCookie,  // Session for perms check
       },
       body: JSON.stringify({ newOwnerTargetId: newOwnerId }),
     });
