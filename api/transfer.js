@@ -1,88 +1,75 @@
 // api/change-owner.js
-// Vercel serverless function for Roblox group ownership transfer
+// Vercel serverless function – expects X-CSRF-TOKEN to be sent by the client
 
 export default async function handler(req, res) {
-  // Only allow POST requests
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+  // Only allow POST
+  if (req.method !== "POST") {
+    res.setHeader("Allow", "POST");
+    return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
-    const { ownerId, targetId, cookie, groupId } = req.body;
+    const { cookie, csrfToken, groupId, targetId } = req.body;
 
-    // Validate required parameters
-    if (!ownerId || !targetId || !cookie || !groupId) {
+    // Validate all required fields
+    if (!cookie || !csrfToken || !groupId || !targetId) {
       return res.status(400).json({
-        error: 'Missing required parameters',
-        required: ['ownerId', 'targetId', 'cookie', 'groupId']
+        error: "Missing required parameters",
+        required: ["cookie", "csrfToken", "groupId", "targetId"],
       });
     }
 
-    // Step 1: Get CSRF token
-    const csrfResponse = await fetch('https://auth.roblox.com/v1/authentication-ticket', {
-      method: 'POST',
-      headers: {
-        'Cookie': `.ROBLOSECURITY=${cookie}`,
-        'Content-Type': 'application/json'
-      }
-    });
+    const parsedGroupId = parseInt(groupId, 10);
+    const parsedTargetId = parseInt(targetId, 10);
 
-    const csrfToken = csrfResponse.headers.get('x-csrf-token');
-    
-    if (!csrfToken) {
-      return res.status(401).json({
-        error: 'Failed to obtain CSRF token',
-        details: 'Invalid .ROBLOSECURITY cookie or authentication failed'
-      });
+    if (isNaN(parsedGroupId) || isNaN(parsedTargetId)) {
+      return res.status(400).json({ error: "groupId and targetId must be valid numbers" });
     }
 
-    // Step 2: Make the ownership transfer request
-    const transferResponse = await fetch(
-      `https://groups.roblox.com/v1/groups/${groupId}/change-owner`,
+    // Perform the ownership change
+    const response = await fetch(
+      `https://groups.roblox.com/v1/groups/${parsedGroupId}/change-owner`,
       {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Cookie': `.ROBLOSECURITY=${cookie}`,
-          'X-CSRF-TOKEN': csrfToken,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
+          Cookie: `.ROBLOSECURITY=${cookie}`,
+          "X-CSRF-TOKEN": csrfToken,
+          "Content-Type": "application/json",
+          Accept: "application/json",
         },
-        body: JSON.stringify({
-          userId: parseInt(targetId)
-        })
+        body: JSON.stringify({ userId: parsedTargetId }),
       }
     );
 
-    const responseData = await transferResponse.json();
+    const data = await response.json();
 
-    // Check if the request was successful
-    if (!transferResponse.ok) {
-      return res.status(transferResponse.status).json({
-        error: 'Ownership transfer failed',
-        details: responseData,
-        status: transferResponse.status
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: "Roblox API error",
+        roblox: data,
+        status: response.status,
       });
     }
 
-    // Success response
     return res.status(200).json({
       success: true,
-      message: 'Group ownership transferred successfully',
-      data: responseData
+      message: "Ownership transferred successfully",
+      data,
     });
-
-  } catch (error) {
-    console.error('Error:', error);
+  } catch (err) {
+    console.error("change-owner error:", err);
     return res.status(500).json({
-      error: 'Internal server error',
-      message: error.message
+      error: "Internal server error",
+      message: err.message,
     });
   }
 }
 
-// CORS configuration (optional, uncomment if needed)
+// Allow large cookies / bodies if needed
 export const config = {
   api: {
-    bodyParser: true,
+    bodyParser: {
+      sizeLimit: "1mb",
+    },
   },
 };
