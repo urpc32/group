@@ -1,14 +1,12 @@
-// api/change-owner.js
-// Fully fixed & hardened version – works every time
-
+// api/get-csrf.js
+// Gets a fresh, valid X-CSRF-TOKEN using only the .ROBLOSECURITY cookie
 export default async function handler(req, res) {
-  // Only allow POST
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // ——— 1. Manual raw body parsing (bye Vercel "Invalid JSON") ———
+  // Manual raw body (same trick as your change-owner route)
   let rawBody = "";
   try {
     const chunks = [];
@@ -23,90 +21,55 @@ export default async function handler(req, res) {
   try {
     body = JSON.parse(rawBody);
   } catch (e) {
-    return res
-      .status(400)
-      .json({ error: "Invalid JSON", details: e.message });
+    return res.status(400).json({ error: "Invalid JSON" });
   }
 
-  // ——— 2. Extract & CLEAN inputs ———
-  const { cookie: rawCookie = "", csrfToken = "", groupId, targetId } = body;
+  const { cookie: rawCookie = "" } = body;
+  const cookie = (rawCookie || "").toString().trim().replace(/^["']|["']$/g, "");
 
-  const cookie = (rawCookie || "")
-    .toString()
-    .trim()
-    .replace(/^["']|["']$/g, ""); // removes surrounding quotes
-
-  if (!cookie || !csrfToken || !groupId || !targetId) {
-    return res.status(400).json({
-      error: "Missing required fields",
-      got: { cookie: !!cookie, csrfToken: !!csrfToken, groupId, targetId },
-    });
+  if (!cookie) {
+    return res.status(400).json({ error: "Missing .ROBLOSECURITY cookie" });
   }
 
-  const parsedGroupId = parseInt(groupId, 10);
-  const parsedTargetId = parseInt(targetId, 10);
-  if (isNaN(parsedGroupId) || isNaN(parsedTargetId)) {
-    return res.status(400).json({ error: "groupId and targetId must be numbers" });
-  }
-
-  // ——— 3. FINAL REQUEST TO ROBLOX ———
   try {
-    const robloxRes = await fetch(
-      `https://groups.roblox.com/v1/groups/${parsedGroupId}/change-owner`,
-      {
-        method: "POST",
-        headers: {
-          Cookie: `.ROBLOSECURITY=${cookie}`,
-          "X-CSRF-TOKEN": csrfToken.trim(),
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({ userId: parsedTargetId }),
-      }
-    );
+    // Step 1: Do a dummy POST request that always requires CSRF (e.g. logout)
+    // Roblox will respond with 403 and set the x-csrf-token header
+    const dummy = await fetch("https://auth.roblox.com/v2/logout", {
+      method: "POST",
+      headers: {
+        Cookie: `.ROBLOSECURITY=${cookie}`,
+        // No X-CSRF-TOKEN header on purpose → forces Roblox to give us a new one
+      },
+      body: "{}", // empty JSON is fine
+    });
 
-    const data = await robloxRes.json().catch(() => ({}));
+    const newToken = dummy.headers.get("x-csrf-token");
 
-    // Helpful error messages
-    if (!robloxRes.ok) {
-      if (robloxRes.status === 401) {
-        return res.status(401).json({
-          error: "Invalid or expired .ROBLOSECURITY cookie",
-          tip: "Log in again on roblox.com and copy a fresh cookie",
-          roblox: data,
-        });
-      }
-      if (robloxRes.status === 403) {
-        return res.status(403).json({
-          error: "Invalid X-CSRF-TOKEN",
-          tip: "Get a fresh token by doing a dummy POST (e.g. to /logout) with the cookie first",
-          roblox: data,
-        });
-      }
-
-      return res.status(robloxRes.status).json({
-        error: "Roblox rejected the request",
-        status: robloxRes.status,
-        roblox: data,
+    if (!newToken) {
+      return res.status(400).json({
+        error: "Failed to retrieve X-CSRF-TOKEN",
+        tip: "Cookie might be invalid, expired, or IP-banned",
+        robloxStatus: dummy.status,
+        robloxBody: await dummy.text().catch(() => "unreadable"),
       });
     }
 
-    // SUCCESS
+    // Success – return the fresh token
     return res.status(200).json({
       success: true,
-      message: "Group ownership transferred!",
-      roblox: data,
+      csrfToken: newToken,
+      message: "Fresh X-CSRF-TOKEN obtained – ready to change owner",
     });
   } catch (err) {
-    console.error("Unexpected error:", err);
+    console.error("CSRF fetch error:", err);
     return res.status(500).json({
-      error: "Internal server error",
-      message: err.message,
+      error: "Unexpected error while fetching CSRF token",
+      details: err.message,
     });
   }
 }
 
-// THIS IS CRITICAL – disable Vercel's parser
+// Critical: disable Vercel's automatic body parser
 export const config = {
   api: {
     bodyParser: false,
