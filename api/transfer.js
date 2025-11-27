@@ -1,17 +1,38 @@
 // api/change-owner.js
-// Vercel serverless function – expects X-CSRF-TOKEN to be sent by the client
 
 export default async function handler(req, res) {
-  // Only allow POST
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  // === Manually parse body to avoid Vercel's strict parser ===
+  let body;
   try {
-    const { cookie, csrfToken, groupId, targetId } = req.body;
+    const buffers = [];
+    for await (const chunk of req) {
+      buffers.push(chunk);
+    }
+    const rawBody = Buffer.concat(buffers).toString("utf-8");
+    
+    // If body is empty or just whitespace
+    if (!rawBody || !rawBody.trim()) {
+      return res.status(400).json({ error: "Empty request body" });
+    }
 
-    // Validate all required fields
+    body = JSON.parse(rawBody);
+  } catch (parseError) {
+    console.error("Failed to parse JSON body:", parseError);
+    return res.status(400).json({
+      error: "Invalid JSON in request body",
+      details: parseError.message,
+    });
+  }
+  // ========================================================
+
+  try {
+    const { cookie, csrfToken, groupId, targetId } = body;
+
     if (!cookie || !csrfToken || !groupId || !targetId) {
       return res.status(400).json({
         error: "Missing required parameters",
@@ -26,16 +47,15 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "groupId and targetId must be valid numbers" });
     }
 
-    // Perform the ownership change
     const response = await fetch(
       `https://groups.roblox.com/v1/groups/${parsedGroupId}/change-owner`,
       {
         method: "POST",
         headers: {
-          Cookie: `.ROBLOSECURITY=${cookie}`,
+          "Cookie": `.ROBLOSECURITY=${cookie}`,
           "X-CSRF-TOKEN": csrfToken,
           "Content-Type": "application/json",
-          Accept: "application/json",
+          "Accept": "application/json",
         },
         body: JSON.stringify({ userId: parsedTargetId }),
       }
@@ -60,16 +80,14 @@ export default async function handler(req, res) {
     console.error("change-owner error:", err);
     return res.status(500).json({
       error: "Internal server error",
-      message: err.message,
+      message: err.message || "Unknown error",
     });
   }
 }
 
-// Allow large cookies / bodies if needed
+// This is the key: disable Vercel's default body parser
 export const config = {
   api: {
-    bodyParser: {
-      sizeLimit: "1mb",
-    },
+    bodyParser: false, // We handle parsing ourselves
   },
 };
