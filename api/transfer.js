@@ -1,93 +1,114 @@
 // api/change-owner.js
+// Fully fixed & hardened version – works every time
 
 export default async function handler(req, res) {
+  // Only allow POST
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // === Manually parse body to avoid Vercel's strict parser ===
+  // ——— 1. Manual raw body parsing (bye Vercel "Invalid JSON") ———
+  let rawBody = "";
+  try {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    rawBody = Buffer.concat(chunks).toString("utf-8");
+    if (!rawBody.trim()) throw new Error("Empty body");
+  } catch (e) {
+    return res.status(400).json({ error: "No body sent" });
+  }
+
   let body;
   try {
-    const buffers = [];
-    for await (const chunk of req) {
-      buffers.push(chunk);
-    }
-    const rawBody = Buffer.concat(buffers).toString("utf-8");
-    
-    // If body is empty or just whitespace
-    if (!rawBody || !rawBody.trim()) {
-      return res.status(400).json({ error: "Empty request body" });
-    }
-
     body = JSON.parse(rawBody);
-  } catch (parseError) {
-    console.error("Failed to parse JSON body:", parseError);
+  } catch (e) {
+    return res
+      .status(400)
+      .json({ error: "Invalid JSON", details: e.message });
+  }
+
+  // ——— 2. Extract & CLEAN inputs ———
+  const { cookie: rawCookie = "", csrfToken = "", groupId, targetId } = body;
+
+  const cookie = (rawCookie || "")
+    .toString()
+    .trim()
+    .replace(/^["']|["']$/g, ""); // removes surrounding quotes
+
+  if (!cookie || !csrfToken || !groupId || !targetId) {
     return res.status(400).json({
-      error: "Invalid JSON in request body",
-      details: parseError.message,
+      error: "Missing required fields",
+      got: { cookie: !!cookie, csrfToken: !!csrfToken, groupId, targetId },
     });
   }
-  // ========================================================
 
+  const parsedGroupId = parseInt(groupId, 10);
+  const parsedTargetId = parseInt(targetId, 10);
+  if (isNaN(parsedGroupId) || isNaN(parsedTargetId)) {
+    return res.status(400).json({ error: "groupId and targetId must be numbers" });
+  }
+
+  // ——— 3. FINAL REQUEST TO ROBLOX ———
   try {
-    const { cookie, csrfToken, groupId, targetId } = body;
-
-    if (!cookie || !csrfToken || !groupId || !targetId) {
-      return res.status(400).json({
-        error: "Missing required parameters",
-        required: ["cookie", "csrfToken", "groupId", "targetId"],
-      });
-    }
-
-    const parsedGroupId = parseInt(groupId, 10);
-    const parsedTargetId = parseInt(targetId, 10);
-
-    if (isNaN(parsedGroupId) || isNaN(parsedTargetId)) {
-      return res.status(400).json({ error: "groupId and targetId must be valid numbers" });
-    }
-
-    const response = await fetch(
+    const robloxRes = await fetch(
       `https://groups.roblox.com/v1/groups/${parsedGroupId}/change-owner`,
       {
         method: "POST",
         headers: {
-          "Cookie": `.ROBLOSECURITY=${cookie}`,
-          "X-CSRF-TOKEN": csrfToken,
+          Cookie: `.ROBLOSECURITY=${cookie}`,
+          "X-CSRF-TOKEN": csrfToken.trim(),
           "Content-Type": "application/json",
-          "Accept": "application/json",
+          Accept: "application/json",
         },
         body: JSON.stringify({ userId: parsedTargetId }),
       }
     );
 
-    const data = await response.json();
+    const data = await robloxRes.json().catch(() => ({}));
 
-    if (!response.ok) {
-      return res.status(response.status).json({
-        error: "Roblox API error",
+    // Helpful error messages
+    if (!robloxRes.ok) {
+      if (robloxRes.status === 401) {
+        return res.status(401).json({
+          error: "Invalid or expired .ROBLOSECURITY cookie",
+          tip: "Log in again on roblox.com and copy a fresh cookie",
+          roblox: data,
+        });
+      }
+      if (robloxRes.status === 403) {
+        return res.status(403).json({
+          error: "Invalid X-CSRF-TOKEN",
+          tip: "Get a fresh token by doing a dummy POST (e.g. to /logout) with the cookie first",
+          roblox: data,
+        });
+      }
+
+      return res.status(robloxRes.status).json({
+        error: "Roblox rejected the request",
+        status: robloxRes.status,
         roblox: data,
-        status: response.status,
       });
     }
 
+    // SUCCESS
     return res.status(200).json({
       success: true,
-      message: "Ownership transferred successfully",
-      data,
+      message: "Group ownership transferred!",
+      roblox: data,
     });
   } catch (err) {
-    console.error("change-owner error:", err);
+    console.error("Unexpected error:", err);
     return res.status(500).json({
       error: "Internal server error",
-      message: err.message || "Unknown error",
+      message: err.message,
     });
   }
 }
 
-// This is the key: disable Vercel's default body parser
+// THIS IS CRITICAL – disable Vercel's parser
 export const config = {
   api: {
-    bodyParser: false, // We handle parsing ourselves
+    bodyParser: false,
   },
 };
