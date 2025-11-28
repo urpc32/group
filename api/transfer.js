@@ -27,26 +27,35 @@ export default async function handler(req, res) {
   }
 
   const { cookie: rawCookie } = body;
-  const cookie = (rawCookie || "").toString().trim();
+  let cookie = (rawCookie || "").toString().trim();
 
-  if (!cookie || !cookie.includes("_|WARNING:-")) {
+  // Handle cookies in format "CAEaAhADIhwKBG..." (with or without .ROBLOSECURITY= prefix)
+  if (cookie.startsWith(".ROBLOSECURITY=")) {
+    cookie = cookie.substring(".ROBLOSECURITY=".length);
+  }
+
+  if (!cookie || cookie.length < 10 || !cookie.startsWith("CA")) {
     return res.status(400).json({
       error: "Invalid or missing .ROBLOSECURITY cookie",
-      tip: "Cookie must start with '_|WARNING:-'",
+      tip: "Cookie should start with 'CA' (like CAEaAhADIhwKBG...)",
     });
   }
 
   try {
-    // BEST & SAFEST ENDPOINT (2025): https://auth.roblox.com/
-    // This endpoint is literally made for this purpose – returns token on 403, never logs out
-    const response = await fetch("https://auth.roblox.com/", {
+    // BEST & SAFEST ENDPOINT (2025): https://auth.roblox.com/v2/login
+    // This endpoint returns a fresh CSRF token on 403, never logs out
+    const response = await fetch("https://auth.roblox.com/v2/login", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Cookie: `.ROBLOSECURITY=${cookie}`,
         // Intentionally NO X-CSRF-TOKEN → forces Roblox to generate a fresh one
       },
-      body: "{}", // Empty JSON body is sufficient
+      body: JSON.stringify({
+        ctype: "Username",
+        cvalue: "",
+        password: ""
+      }),
     });
 
     const newToken = 
