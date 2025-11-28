@@ -1,4 +1,4 @@
-// pages/api/get-csrf.js  (or app/api/get-csrf/route.js if using App Router)
+// pages/api/get-csrf.js (or app/api/get-csrf/route.js if using App Router)
 // Gets a fresh, valid X-CSRF-TOKEN using only the .ROBLOSECURITY cookie
 // 100% safe – does NOT log you out
 
@@ -29,7 +29,7 @@ export default async function handler(req, res) {
   const { cookie: rawCookie } = body;
   const cookie = (rawCookie || "").toString().trim();
 
-  if (!cookie || !cookie.includes("_|WARNING")) {
+  if (!cookie || !cookie.includes("_|WARNING:-")) {
     return res.status(400).json({
       error: "Invalid or missing .ROBLOSECURITY cookie",
       tip: "Cookie must start with '_|WARNING:-'",
@@ -49,7 +49,10 @@ export default async function handler(req, res) {
       body: "{}", // Empty JSON body is sufficient
     });
 
-    const newToken = response.headers.get("x-csrf-token") || response.headers.get("X-CSRF-Token");
+    const newToken = 
+      response.headers.get("x-csrf-token") || 
+      response.headers.get("X-CSRF-Token") ||
+      response.headers.get("X-CSRF-TOKEN");
 
     if (!newToken) {
       const text = await response.text();
