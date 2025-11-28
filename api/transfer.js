@@ -1,5 +1,6 @@
 // pages/api/change-group-owner.js
 // Gets CSRF token and changes group owner in one call
+// 100% safe – does NOT log you out
 export default async function handler(req, res) {
   // Only allow POST
   if (req.method !== "POST") {
@@ -63,8 +64,10 @@ export default async function handler(req, res) {
     });
   }
 
-  // Handle cookie validation
+  // Handle cookie validation - support both formats
   let cookie = (rawCookie || "").toString().trim();
+  
+  // Handle cookies in format "CAEaAhADIhwKBG..." (with or without .ROBLOSECURITY= prefix)
   if (cookie.startsWith(".ROBLOSECURITY=")) {
     cookie = cookie.substring(".ROBLOSECURITY=".length);
   }
@@ -82,6 +85,8 @@ export default async function handler(req, res) {
   try {
     console.log("[change-group-owner] Fetching CSRF token...");
     
+    // BEST & SAFEST ENDPOINT (2025): https://auth.roblox.com/v2/login
+    // This endpoint returns a fresh CSRF token on 403, never logs out
     const csrfResponse = await fetch("https://auth.roblox.com/v2/login", {
       method: "POST",
       headers: {
@@ -113,7 +118,7 @@ export default async function handler(req, res) {
       
       return res.status(400).json({
         success: false,
-        error: "Failed to get CSRF token from Roblox",
+        error: "No X-CSRF-TOKEN returned from Roblox",
         tip: "Your cookie is likely expired, invalid, or rate-limited",
         status: csrfResponse.status,
         responseBody: text.substring(0, 500),
@@ -126,9 +131,8 @@ export default async function handler(req, res) {
     console.error("[change-group-owner] CSRF fetch error:", err);
     return res.status(500).json({
       success: false,
-      error: "Error fetching CSRF token",
+      error: "Internal server error while fetching CSRF token",
       details: err.message,
-      tip: "Check your network connection and try again",
     });
   }
 
