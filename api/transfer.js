@@ -1,5 +1,5 @@
 // pages/api/change-group-owner.js
-// Gets CSRF token and changes group owner in one call
+// Gets CSRF token from groups domain and changes group owner
 // 100% safe – does NOT log you out
 export default async function handler(req, res) {
   // Only allow POST
@@ -80,26 +80,25 @@ export default async function handler(req, res) {
     });
   }
 
-  // STEP 1: Get fresh CSRF token
+  // STEP 1: Get fresh CSRF token FROM GROUPS DOMAIN
   let csrfToken;
   try {
-    console.log("[change-group-owner] Fetching CSRF token...");
+    console.log("[change-group-owner] Fetching CSRF token from groups.roblox.com...");
     
-    // BEST & SAFEST ENDPOINT (2025): https://auth.roblox.com/v2/login
-    // This endpoint returns a fresh CSRF token on 403, never logs out
-    const csrfResponse = await fetch("https://auth.roblox.com/v2/login", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Cookie: `.ROBLOSECURITY=${cookie}`,
-        // Intentionally NO X-CSRF-TOKEN → forces Roblox to generate a fresh one
-      },
-      body: JSON.stringify({
-        ctype: "Username",
-        cvalue: "",
-        password: ""
-      }),
-    });
+    // CRITICAL FIX: Use groups.roblox.com endpoint to get domain-specific CSRF
+    // This endpoint is safe and returns a valid token for groups operations
+    const csrfResponse = await fetch(
+      `https://groups.roblox.com/v1/groups/${groupIdNum}`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `.ROBLOSECURITY=${cookie}`,
+          // Intentionally NO X-CSRF-TOKEN → forces Roblox to generate a fresh one
+        },
+        body: JSON.stringify({}),
+      }
+    );
 
     csrfToken = 
       csrfResponse.headers.get("x-csrf-token") || 
@@ -118,14 +117,14 @@ export default async function handler(req, res) {
       
       return res.status(400).json({
         success: false,
-        error: "No X-CSRF-TOKEN returned from Roblox",
+        error: "No X-CSRF-TOKEN returned from Roblox groups API",
         tip: "Your cookie is likely expired, invalid, or rate-limited",
         status: csrfResponse.status,
         responseBody: text.substring(0, 500),
       });
     }
 
-    console.log("[change-group-owner] CSRF token obtained successfully");
+    console.log("[change-group-owner] CSRF token obtained successfully from groups domain");
     
   } catch (err) {
     console.error("[change-group-owner] CSRF fetch error:", err);
