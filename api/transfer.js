@@ -1,75 +1,85 @@
-// api/get-csrf.js
+// pages/api/get-csrf.js  (or app/api/get-csrf/route.js if using App Router)
 // Gets a fresh, valid X-CSRF-TOKEN using only the .ROBLOSECURITY cookie
+// 100% safe – does NOT log you out
+
 export default async function handler(req, res) {
+  // Only allow POST
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Manual raw body (same trick as your change-owner route)
+  // Manually parse raw body (required for large/unparsed payloads on Vercel)
   let rawBody = "";
   try {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     rawBody = Buffer.concat(chunks).toString("utf-8");
-    if (!rawBody.trim()) throw new Error("Empty body");
   } catch (e) {
-    return res.status(400).json({ error: "No body sent" });
+    return res.status(400).json({ error: "Failed to read request body" });
   }
 
   let body;
   try {
-    body = JSON.parse(rawBody);
+    body = JSON.parse(rawBody || "{}");
   } catch (e) {
-    return res.status(400).json({ error: "Invalid JSON" });
+    return res.status(400).json({ error: "Invalid JSON in request body" });
   }
 
-  const { cookie: rawCookie = "" } = body;
-  const cookie = (rawCookie || "").toString().trim().replace(/^["']|["']$/g, "");
+  const { cookie: rawCookie } = body;
+  const cookie = (rawCookie || "").toString().trim();
 
-  if (!cookie) {
-    return res.status(400).json({ error: "Missing .ROBLOSECURITY cookie" });
+  if (!cookie || !cookie.includes("_|WARNING")) {
+    return res.status(400).json({
+      error: "Invalid or missing .ROBLOSECURITY cookie",
+      tip: "Cookie must start with '_|WARNING:-'",
+    });
   }
 
   try {
-    // Step 1: Do a dummy POST request that always requires CSRF (e.g. logout)
-    // Roblox will respond with 403 and set the x-csrf-token header
-    const dummy = await fetch("https://auth.roblox.com/v2/logout", {
+    // BEST & SAFEST ENDPOINT (2025): https://auth.roblox.com/
+    // This endpoint is literally made for this purpose – returns token on 403, never logs out
+    const response = await fetch("https://auth.roblox.com/", {
       method: "POST",
       headers: {
+        "Content-Type": "application/json",
         Cookie: `.ROBLOSECURITY=${cookie}`,
-        // No X-CSRF-TOKEN header on purpose → forces Roblox to give us a new one
+        // Intentionally NO X-CSRF-TOKEN → forces Roblox to generate a fresh one
       },
-      body: "{}", // empty JSON is fine
+      body: "{}", // Empty JSON body is sufficient
     });
 
-    const newToken = dummy.headers.get("x-csrf-token");
+    const newToken = response.headers.get("x-csrf-token") || response.headers.get("X-CSRF-Token");
 
     if (!newToken) {
+      const text = await response.text();
       return res.status(400).json({
-        error: "Failed to retrieve X-CSRF-TOKEN",
-        tip: "Cookie might be invalid, expired, or IP-banned",
-        robloxStatus: dummy.status,
-        robloxBody: await dummy.text().catch(() => "unreadable"),
+        success: false,
+        error: "No X-CSRF-TOKEN returned from Roblox",
+        tip: "Your cookie is likely expired, invalid, or rate-limited",
+        status: response.status,
+        responseBody: text.substring(0, 500),
       });
     }
 
-    // Success – return the fresh token
+    // Success!
     return res.status(200).json({
       success: true,
       csrfToken: newToken,
-      message: "Fresh X-CSRF-TOKEN obtained – ready to change owner",
+      message: "Fresh X-CSRF-TOKEN fetched successfully (safe method)",
+      fetchedAt: new Date().toISOString(),
     });
   } catch (err) {
-    console.error("CSRF fetch error:", err);
+    console.error("[get-csrf] Unexpected error:", err);
     return res.status(500).json({
-      error: "Unexpected error while fetching CSRF token",
+      success: false,
+      error: "Internal server error while fetching CSRF token",
       details: err.message,
     });
   }
 }
 
-// Critical: disable Vercel's automatic body parser
+// Critical: Disable Vercel's default body parser
 export const config = {
   api: {
     bodyParser: false,
