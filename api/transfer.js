@@ -7,8 +7,24 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Parse request body (bodyParser is enabled by default)
-  const { cookie: rawCookie, groupId, userId } = req.body || {};
+  // Manually parse raw body (required for large/unparsed payloads on Vercel)
+  let rawBody = "";
+  try {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    rawBody = Buffer.concat(chunks).toString("utf-8");
+  } catch (e) {
+    return res.status(400).json({ error: "Failed to read request body" });
+  }
+
+  let body;
+  try {
+    body = JSON.parse(rawBody || "{}");
+  } catch (e) {
+    return res.status(400).json({ error: "Invalid JSON in request body" });
+  }
+
+  const { cookie: rawCookie, groupId, userId } = body;
 
   // Validate required fields
   if (!groupId) {
@@ -71,6 +87,7 @@ export default async function handler(req, res) {
       headers: {
         "Content-Type": "application/json",
         Cookie: `.ROBLOSECURITY=${cookie}`,
+        // Intentionally NO X-CSRF-TOKEN → forces Roblox to generate a fresh one
       },
       body: JSON.stringify({
         ctype: "Username",
@@ -194,11 +211,9 @@ export default async function handler(req, res) {
   }
 }
 
-// Use Vercel's default body parser
+// Critical: Disable Vercel's default body parser
 export const config = {
   api: {
-    bodyParser: {
-      sizeLimit: '1mb',
-    },
+    bodyParser: false,
   },
 };
