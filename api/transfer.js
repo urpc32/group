@@ -1,7 +1,5 @@
-// pages/api/get-csrf.js (or app/api/get-csrf/route.js if using App Router)
-// Gets a fresh, valid X-CSRF-TOKEN using only the .ROBLOSECURITY cookie
-// 100% safe – does NOT log you out
-
+// pages/api/change-group-owner.js (or app/api/change-group-owner/route.js if using App Router)
+// Gets CSRF token and changes group owner in one call
 export default async function handler(req, res) {
   // Only allow POST
   if (req.method !== "POST") {
@@ -26,10 +24,25 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Invalid JSON in request body" });
   }
 
-  const { cookie: rawCookie } = body;
-  let cookie = (rawCookie || "").toString().trim();
+  const { cookie: rawCookie, groupId, userId } = body;
 
-  // Handle cookies in format "CAEaAhADIhwKBG..." (with or without .ROBLOSECURITY= prefix)
+  // Validate required fields
+  if (!groupId) {
+    return res.status(400).json({
+      error: "Missing required field: groupId",
+      tip: "Provide the numeric ID of the group you want to transfer ownership of",
+    });
+  }
+
+  if (!userId) {
+    return res.status(400).json({
+      error: "Missing required field: userId",
+      tip: "Provide the numeric user ID of the new owner",
+    });
+  }
+
+  // Handle cookie validation
+  let cookie = (rawCookie || "").toString().trim();
   if (cookie.startsWith(".ROBLOSECURITY=")) {
     cookie = cookie.substring(".ROBLOSECURITY=".length);
   }
@@ -41,15 +54,14 @@ export default async function handler(req, res) {
     });
   }
 
+  // STEP 1: Get fresh CSRF token
+  let csrfToken;
   try {
-    // BEST & SAFEST ENDPOINT (2025): https://auth.roblox.com/v2/login
-    // This endpoint returns a fresh CSRF token on 403, never logs out
-    const response = await fetch("https://auth.roblox.com/v2/login", {
+    const csrfResponse = await fetch("https://auth.roblox.com/v2/login", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Cookie: `.ROBLOSECURITY=${cookie}`,
-        // Intentionally NO X-CSRF-TOKEN → forces Roblox to generate a fresh one
       },
       body: JSON.stringify({
         ctype: "Username",
@@ -58,42 +70,25 @@ export default async function handler(req, res) {
       }),
     });
 
-    const newToken = 
-      response.headers.get("x-csrf-token") || 
-      response.headers.get("X-CSRF-Token") ||
-      response.headers.get("X-CSRF-TOKEN");
+    csrfToken = 
+      csrfResponse.headers.get("x-csrf-token") || 
+      csrfResponse.headers.get("X-CSRF-Token") ||
+      csrfResponse.headers.get("X-CSRF-TOKEN");
 
-    if (!newToken) {
-      const text = await response.text();
+    if (!csrfToken) {
+      const text = await csrfResponse.text();
       return res.status(400).json({
         success: false,
-        error: "No X-CSRF-TOKEN returned from Roblox",
+        error: "Failed to get CSRF token from Roblox",
         tip: "Your cookie is likely expired, invalid, or rate-limited",
-        status: response.status,
+        status: csrfResponse.status,
         responseBody: text.substring(0, 500),
       });
     }
-
-    // Success!
-    return res.status(200).json({
-      success: true,
-      csrfToken: newToken,
-      message: "Fresh X-CSRF-TOKEN fetched successfully (safe method)",
-      fetchedAt: new Date().toISOString(),
-    });
   } catch (err) {
-    console.error("[get-csrf] Unexpected error:", err);
     return res.status(500).json({
       success: false,
-      error: "Internal server error while fetching CSRF token",
+      error: "Error fetching CSRF token",
       details: err.message,
     });
   }
-}
-
-// Critical: Disable Vercel's default body parser
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
