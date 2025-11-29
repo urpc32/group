@@ -80,22 +80,22 @@ export default async function handler(req, res) {
     });
   }
 
-  // STEP 1: Get CSRF token directly from Roblox instead of calling internal endpoint
+  // STEP 1: Get CSRF token directly from Roblox
   let csrfToken;
   try {
-    console.log("[change-group-owner] Getting CSRF token directly from Roblox...");
+    console.log("[change-group-owner] Getting CSRF token from Roblox...");
     
-    // Make a request to Roblox API to get CSRF token
-    const csrfResponse = await fetch("https://auth.roblox.com/v2/login", {
+    // Make initial request to trigger CSRF token response
+    // Use auth.roblox.com endpoint which reliably returns x-csrf-token
+    const csrfResponse = await fetch("https://auth.roblox.com/v2/logout", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Cookie: `.ROBLOSECURITY=${cookie}`,
       },
-      body: JSON.stringify({}),
     });
 
-    // Extract CSRF token from response headers
+    // The CSRF token is returned in the response header as 'x-csrf-token' (lowercase)
     csrfToken = csrfResponse.headers.get("x-csrf-token");
 
     if (!csrfToken) {
@@ -139,7 +139,7 @@ export default async function handler(req, res) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-CSRF-TOKEN": csrfToken,
+          "x-csrf-token": csrfToken, // lowercase header name
           Cookie: `.ROBLOSECURITY=${cookie}`,
         },
         body: JSON.stringify({
