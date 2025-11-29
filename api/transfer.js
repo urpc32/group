@@ -141,7 +141,7 @@ export default async function handler(req, res) {
   }
 
   // STEP 2: Change group owner using the fresh CSRF token
-  try {
+try {
     console.log(`[change-group-owner] Transferring group ${groupIdNum} to user ${userIdNum}...`);
     
     const response = await fetch(
@@ -150,14 +150,28 @@ export default async function handler(req, res) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-csrf-token": csrfToken, // lowercase header name
-          Cookie: `.ROBLOSECURITY=${cookie}`,
+          "X-CSRF-TOKEN": csrfToken, // Standard casing for this header
+          "Cookie": `.ROBLOSECURITY=${cookie}`
         },
         body: JSON.stringify({
           userId: userIdNum,
         }),
       }
     );
+
+    // Add response handling
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    console.log(`[change-group-owner] Success:`, data);
+    
+} catch (error) {
+    console.error(`[change-group-owner] Error:`, error.message);
+    throw error; // Re-throw to handle in calling function
+}
 
     let responseText = "";
     let responseData = {};
