@@ -80,37 +80,44 @@ export default async function handler(req, res) {
     });
   }
 
-  // STEP 1: Call your existing get-csrf endpoint to get a fresh token
+  // STEP 1: Get CSRF token directly from Roblox instead of calling internal endpoint
   let csrfToken;
   try {
-    console.log("[change-group-owner] Getting CSRF token from /api/get-csrf...");
+    console.log("[change-group-owner] Getting CSRF token directly from Roblox...");
     
-    // Get the base URL for the current deployment
-    const protocol = req.headers['x-forwarded-proto'] || 'http';
-    const host = req.headers.host;
-    const baseUrl = `${protocol}://${host}`;
-    
-    const csrfResponse = await fetch(`${baseUrl}/api/get-csrf`, {
+    // Make a request to Roblox API to get CSRF token
+    const csrfResponse = await fetch("https://auth.roblox.com/v2/login", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Cookie: `.ROBLOSECURITY=${cookie}`,
       },
-      body: JSON.stringify({ cookie: rawCookie }),
+      body: JSON.stringify({}),
     });
 
-    const csrfData = await csrfResponse.json();
+    // Extract CSRF token from response headers
+    csrfToken = csrfResponse.headers.get("x-csrf-token");
 
-    if (!csrfData.success || !csrfData.csrfToken) {
-      console.error("[change-group-owner] Failed to get CSRF token:", csrfData);
+    if (!csrfToken) {
+      console.error("[change-group-owner] No CSRF token in response headers");
+      
+      // Try to get more info about the error
+      let errorText = "";
+      try {
+        errorText = await csrfResponse.text();
+      } catch (e) {
+        errorText = "Unable to read error response";
+      }
+
       return res.status(400).json({
         success: false,
-        error: "Failed to obtain CSRF token",
+        error: "Failed to obtain CSRF token from Roblox",
         tip: "Your cookie may be expired or invalid",
-        csrfError: csrfData,
+        status: csrfResponse.status,
+        details: errorText.substring(0, 200),
       });
     }
 
-    csrfToken = csrfData.csrfToken;
     console.log("[change-group-owner] CSRF token obtained successfully");
     
   } catch (err) {
