@@ -93,7 +93,7 @@ export default async function handler(req, res) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Cookie: `.ROBLOSECURITY=${cookie}`,
+        Cookie: `.ROBLOSECURITY=${cookieToken}`,
         // Intentionally NO x-csrf-token → forces Roblox to generate a fresh one
       },
       body: JSON.stringify({
@@ -141,7 +141,7 @@ export default async function handler(req, res) {
   }
 
   // STEP 2: Change group owner using the fresh CSRF token
-try {
+  try {
     console.log(`[change-group-owner] Transferring group ${groupIdNum} to user ${userIdNum}...`);
     
     const response = await fetch(
@@ -150,28 +150,14 @@ try {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-CSRF-TOKEN": csrfToken, // Standard casing for this header
-          "Cookie": `.ROBLOSECURITY=${cookie}`
+          "X-CSRF-TOKEN": csrfToken,
+          "Cookie": `.ROBLOSECURITY=${cookieToken}`
         },
         body: JSON.stringify({
           userId: userIdNum,
         }),
       }
     );
-
-    // Add response handling
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`HTTP ${response.status}: ${errorText}`);
-    }
-
-    const data = await response.json();
-    console.log(`[change-group-owner] Success:`, data);
-    
-} catch (error) {
-    console.error(`[change-group-owner] Error:`, error.message);
-    throw error; // Re-throw to handle in calling function
-}
 
     let responseText = "";
     let responseData = {};
