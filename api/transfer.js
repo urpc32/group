@@ -63,15 +63,18 @@ export default async function handler(req, res) {
     });
   }
 
-  // Handle cookie validation - support both formats
-  let cookie = (rawCookie || "").toString().trim();
+  // Handle cookie - keep the full cookie string with prefix for CSRF request
+  let fullCookie = (rawCookie || "").toString().trim();
   
-  // Handle cookies in format "CAEaAhADIhwKBG..." (with or without .ROBLOSECURITY= prefix)
-  if (cookie.startsWith(".ROBLOSECURITY=")) {
-    cookie = cookie.substring(".ROBLOSECURITY=".length);
+  // Ensure it has the .ROBLOSECURITY= prefix for the CSRF request
+  if (!fullCookie.startsWith(".ROBLOSECURITY=")) {
+    fullCookie = `.ROBLOSECURITY=${fullCookie}`;
   }
 
-  if (!cookie || cookie.length < 10 || !cookie.startsWith("CA")) {
+  // Extract just the token part (without prefix) for validation and change-owner request
+  let cookieToken = fullCookie.substring(".ROBLOSECURITY=".length);
+
+  if (!cookieToken || cookieToken.length < 10 || !cookieToken.startsWith("CA")) {
     return res.status(400).json({
       success: false,
       error: "Invalid or missing .ROBLOSECURITY cookie",
