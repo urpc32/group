@@ -1,5 +1,5 @@
 // pages/api/change-group-owner.js
-// Changes group owner using safe CSRF token fetching (does NOT log you out)
+// Comprehensive group ownership transfer with validation and fallback methods
 export default async function handler(req, res) {
   // Only allow POST
   if (req.method !== "POST") {
@@ -7,7 +7,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Manually parse raw body (required for large/unparsed payloads on Vercel)
+  // Parse request body
   let rawBody = "";
   try {
     const chunks = [];
@@ -24,128 +24,409 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Invalid JSON in request body" });
   }
 
-  const { cookie: rawCookie, groupId, userId } = body;
+  const { cookie: rawCookie, groupId, userId: newOwnerId, playerId } = body;
 
   // Validate required fields
-  if (!groupId) {
-    return res.status(400).json({
-      success: false,
-      error: "Missing required field: groupId",
-      tip: "Provide the numeric ID of the group you want to transfer ownership of",
-    });
-  }
-
-  if (!userId) {
-    return res.status(400).json({
-      success: false,
-      error: "Missing required field: userId",
-      tip: "Provide the numeric user ID of the new owner",
-    });
-  }
-
-  // Validate that groupId and userId are valid numbers
-  const groupIdNum = parseInt(groupId, 10);
-  const userIdNum = parseInt(userId, 10);
-
-  if (isNaN(groupIdNum) || groupIdNum <= 0) {
-    return res.status(400).json({
-      success: false,
-      error: "Invalid groupId",
-      tip: "groupId must be a positive number",
-    });
-  }
-
-  if (isNaN(userIdNum) || userIdNum <= 0) {
-    return res.status(400).json({
-      success: false,
-      error: "Invalid userId",
-      tip: "userId must be a positive number",
-    });
-  }
-
-  // Handle cookie - keep the full cookie string with prefix for CSRF request
-  let fullCookie = (rawCookie || "").toString().trim();
-  
-  // Ensure it has the .ROBLOSECURITY= prefix for the CSRF request
-  if (!fullCookie.startsWith(".ROBLOSECURITY=")) {
-    fullCookie = `.ROBLOSECURITY=${fullCookie}`;
-  }
-
-  // Extract just the token part (without prefix) for validation and change-owner request
-  let cookieToken = fullCookie.substring(".ROBLOSECURITY=".length);
-
-  if (!cookieToken || cookieToken.length < 10 || !cookieToken.startsWith("CA")) {
-    return res.status(400).json({
-      success: false,
-      error: "Invalid or missing .ROBLOSECURITY cookie",
-      tip: "Cookie should start with 'CA' (like CAEaAhADIhwKBG...)",
-    });
-  }
-
-  // STEP 1: Get CSRF token using the safe login endpoint (does NOT log you out)
-  let csrfToken;
-  try {
-    console.log("[change-group-owner] Getting CSRF token from Roblox login endpoint...");
+  if (!groupId || !newOwnerId || !rawCookie) {
+    const missing = [];
+    if (!groupId) missing.push("groupId");
+    if (!newOwnerId) missing.push("userId");
+    if (!rawCookie) missing.push("cookie");
     
-    // BEST & SAFEST ENDPOINT: https://auth.roblox.com/v2/login
-    // This returns a fresh CSRF token on 403, never logs out
-    const csrfResponse = await fetch("https://auth.roblox.com/v2/login", {
+    return res.status(400).json({
+      success: false,
+      error: `Missing required parameters: ${missing.join(", ")}`
+    });
+  }
+
+  // Validate and parse numeric values
+  const numericGroupId = parseInt(groupId, 10);
+  const numericNewOwnerId = parseInt(newOwnerId, 10);
+  const numericPlayerId = playerId ? parseInt(playerId, 10) : null;
+
+  if (isNaN(numericGroupId) || numericGroupId <= 0) {
+    return res.status(400).json({
+      success: false,
+      error: "Invalid groupId: must be a positive number"
+    });
+  }
+
+  if (isNaN(numericNewOwnerId) || numericNewOwnerId <= 0) {
+    return res.status(400).json({
+      success: false,
+      error: "Invalid newOwnerId: must be a positive number"
+    });
+  }
+
+  // Clean and validate cookie
+  let cookieToken = rawCookie.toString().trim();
+  if (cookieToken.startsWith(".ROBLOSECURITY=")) {
+    cookieToken = cookieToken.substring(".ROBLOSECURITY=".length);
+  }
+
+  if (!cookieToken || cookieToken.length < 10) {
+    return res.status(400).json({
+      success: false,
+      error: "Invalid cookie: empty after cleaning"
+    });
+  }
+
+  console.log("🔄 Starting ownership transfer process...");
+  console.log("📋 Group ID:", numericGroupId);
+  console.log("📋 New Owner ID:", numericNewOwnerId);
+  if (numericPlayerId) console.log("📋 Player ID:", numericPlayerId);
+
+  try {
+    // STEP 1: Check account eligibility
+    console.log("🔍 Step 1: Checking account eligibility...");
+    const eligibilityResult = await checkAccountEligibility(cookieToken);
+    
+    if (!eligibilityResult.success) {
+      console.log("❌ Eligibility check failed:", eligibilityResult.error);
+      return res.status(400).json({
+        success: false,
+        error: `Eligibility check failed: ${eligibilityResult.error}`
+      });
+    }
+
+    console.log("✅ Account Info:");
+    console.log("  - Username:", eligibilityResult.username);
+    console.log("  - User ID:", eligibilityResult.userId);
+    console.log("  - Account Age:", eligibilityResult.accountAge >= 0 ? `${eligibilityResult.accountAge} days` : "Unknown");
+    console.log("  - Verified Email:", eligibilityResult.hasVerifiedEmail ? "Yes" : "No");
+    console.log("  - Premium:", eligibilityResult.isPremium ? "Yes" : "No");
+
+    // Warnings
+    const warnings = [];
+    if (eligibilityResult.accountAge >= 0 && eligibilityResult.accountAge < 30) {
+      warnings.push("Account is less than 30 days old - may face additional restrictions");
+      console.log("⚠️  WARNING:", warnings[warnings.length - 1]);
+    }
+    if (!eligibilityResult.hasVerifiedEmail) {
+      warnings.push("Email not verified - may cause transfer restrictions");
+      console.log("⚠️  WARNING:", warnings[warnings.length - 1]);
+    }
+
+    // STEP 2: Verify authentication (if playerId provided)
+    if (numericPlayerId) {
+      console.log("🔍 Step 2: Verifying authentication...");
+      if (eligibilityResult.userId !== numericPlayerId) {
+        console.log("❌ User ID mismatch - Cookie doesn't belong to player");
+        console.log("Expected:", numericPlayerId, "Got:", eligibilityResult.userId);
+        return res.status(403).json({
+          success: false,
+          error: `User ID mismatch: expected ${numericPlayerId}, got ${eligibilityResult.userId}`
+        });
+      }
+      console.log("✅ Authentication successful for:", eligibilityResult.username);
+    }
+
+    // STEP 3: Get group information and verify ownership
+    console.log("🔍 Step 3: Checking group ownership...");
+    const groupResult = await getGroupInfo(numericGroupId, cookieToken);
+    
+    if (!groupResult.success) {
+      console.log("❌ Failed to get group info:", groupResult.error);
+      return res.status(400).json({
+        success: false,
+        error: `Failed to get group info: ${groupResult.error}`
+      });
+    }
+
+    const groupData = groupResult.data;
+    if (!groupData || !groupData.owner || !groupData.owner.userId) {
+      console.log("❌ Group has no owner or is invalid");
+      return res.status(400).json({
+        success: false,
+        error: "Group has no owner or group data is invalid"
+      });
+    }
+
+    const currentOwnerId = parseInt(groupData.owner.userId, 10);
+    if (isNaN(currentOwnerId)) {
+      console.log("❌ Invalid owner ID in group data");
+      return res.status(400).json({
+        success: false,
+        error: "Invalid owner ID in group data"
+      });
+    }
+
+    if (currentOwnerId !== eligibilityResult.userId) {
+      console.log("❌ Player is not the group owner");
+      console.log(" Current owner ID:", currentOwnerId);
+      console.log(" Player ID:", eligibilityResult.userId);
+      return res.status(403).json({
+        success: false,
+        error: `Player ${eligibilityResult.userId} is not the owner of group ${numericGroupId} (current owner: ${currentOwnerId})`,
+        currentOwner: currentOwnerId
+      });
+    }
+    console.log("✅ Ownership verified - Player owns the group");
+
+    // STEP 4: Get CSRF token
+    console.log("🔐 Step 4: Getting CSRF token...");
+    const csrfResult = await getCSRFToken(cookieToken);
+    
+    if (!csrfResult.success) {
+      console.log("❌ CSRF token failed:", csrfResult.error);
+      return res.status(400).json({
+        success: false,
+        error: `Failed to get CSRF token: ${csrfResult.error}`
+      });
+    }
+    console.log("✅ CSRF token obtained");
+
+    // STEP 5: Transfer ownership with fallback
+    console.log("🔄 Step 5: Transferring ownership...");
+    let transferResult = await transferGroupOwnership(
+      numericGroupId, 
+      numericNewOwnerId, 
+      cookieToken, 
+      csrfResult.token
+    );
+
+    // If primary method fails with challenge required, try alternative
+    if (!transferResult.success && transferResult.statusCode === 403 && 
+        transferResult.error.includes("Challenge")) {
+      console.log("🔄 Primary method failed, trying alternative approach...");
+      transferResult = await transferGroupOwnershipAlternative(
+        numericGroupId,
+        numericNewOwnerId,
+        cookieToken,
+        csrfResult.token
+      );
+    }
+
+    if (transferResult.success) {
+      console.log("🎉 Ownership transfer completed successfully!");
+      return res.status(200).json({
+        success: true,
+        message: "Ownership transferred successfully",
+        previousOwner: eligibilityResult.userId,
+        newOwner: numericNewOwnerId,
+        groupId: numericGroupId,
+        groupName: groupData.name || "Unknown",
+        transferredAt: new Date().toISOString(),
+        warnings: warnings.length > 0 ? warnings : undefined
+      });
+    } else {
+      console.log("❌ All transfer methods failed:", transferResult.error);
+
+      // Provide specific guidance based on the error
+      let guidance = "";
+      if (transferResult.error.includes("Challenge")) {
+        guidance = "\n\n📝 SOLUTIONS TO TRY:\n" +
+          "1. Wait 30+ days after account creation\n" +
+          "2. Verify email address in Roblox settings\n" +
+          "3. Add Robux to the account (even 5-10 Robux helps)\n" +
+          "4. Use the account actively for a few days\n" +
+          "5. Try the transfer through Roblox website first\n" +
+          "6. Contact Roblox Support if account is flagged";
+      }
+
+      return res.status(transferResult.statusCode >= 500 ? 502 : transferResult.statusCode || 400).json({
+        success: false,
+        error: `Transfer failed: ${transferResult.error}${guidance}`,
+        statusCode: transferResult.statusCode
+      });
+    }
+
+  } catch (error) {
+    console.error("❌ Unexpected error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error",
+      details: error.message
+    });
+  }
+}
+
+// Helper: Get CSRF token with multiple fallback endpoints
+async function getCSRFToken(cookieToken) {
+  // Try the login endpoint first (most reliable, doesn't log out)
+  try {
+    const response = await fetch("https://auth.roblox.com/v2/login", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Cookie: `.ROBLOSECURITY=${cookieToken}`,
-        // Intentionally NO x-csrf-token → forces Roblox to generate a fresh one
+        "Cookie": `.ROBLOSECURITY=${cookieToken}`
       },
       body: JSON.stringify({
         ctype: "Username",
         cvalue: "",
         password: ""
-      }),
+      })
     });
 
-    // Try all possible header name variations (Roblox can be inconsistent)
-    csrfToken = 
-      csrfResponse.headers.get("x-csrf-token") || 
-      csrfResponse.headers.get("X-CSRF-Token") ||
-      csrfResponse.headers.get("X-CSRF-TOKEN");
+    let csrfToken = response.headers.get("x-csrf-token") || 
+                    response.headers.get("X-CSRF-Token") ||
+                    response.headers.get("X-CSRF-TOKEN");
 
-    if (!csrfToken) {
-      console.error("[change-group-owner] No CSRF token in response headers");
-      
-      // Try to get more info about the error
-      let errorText = "";
-      try {
-        errorText = await csrfResponse.text();
-      } catch (e) {
-        errorText = "Unable to read error response";
-      }
-
-      return res.status(400).json({
-        success: false,
-        error: "Failed to obtain CSRF token from Roblox",
-        tip: "Your cookie may be expired, invalid, or rate-limited",
-        status: csrfResponse.status,
-        details: errorText.substring(0, 200),
-      });
+    if (csrfToken) {
+      return { success: true, token: csrfToken };
     }
-
-    console.log("[change-group-owner] CSRF token obtained successfully");
-    
   } catch (err) {
-    console.error("[change-group-owner] CSRF fetch error:", err);
-    return res.status(500).json({
-      success: false,
-      error: "Internal server error while fetching CSRF token",
-      details: err.message,
-    });
+    console.error("Primary CSRF endpoint failed:", err.message);
   }
 
-  // STEP 2: Change group owner using the fresh CSRF token
+  // Fallback endpoints
+  const endpoints = [
+    "https://auth.roblox.com/v2/logout",
+    "https://friends.roblox.com/v1/users/1/request-friendship",
+    "https://groups.roblox.com/v1/groups/1/join-requests"
+  ];
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Cookie": `.ROBLOSECURITY=${cookieToken}`
+        },
+        body: "{}"
+      });
+
+      let csrfToken = response.headers.get("x-csrf-token") || 
+                      response.headers.get("X-CSRF-Token") ||
+                      response.headers.get("X-CSRF-TOKEN");
+
+      if (csrfToken) {
+        return { success: true, token: csrfToken };
+      }
+
+      // Small delay between attempts
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } catch (err) {
+      console.error(`CSRF endpoint ${endpoint} failed:`, err.message);
+    }
+  }
+
+  return { 
+    success: false, 
+    error: "Failed to obtain CSRF token from any endpoint" 
+  };
+}
+
+// Helper: Get authenticated user info
+async function getAuthenticatedUser(cookieToken) {
   try {
-    console.log(`[change-group-owner] Transferring group ${groupIdNum} to user ${userIdNum}...`);
-    
+    const response = await fetch("https://users.roblox.com/v1/users/authenticated", {
+      method: "GET",
+      headers: {
+        "Cookie": `.ROBLOSECURITY=${cookieToken}`,
+        "Content-Type": "application/json"
+      }
+    });
+
+    if (response.ok) {
+      const userData = await response.json();
+      if (userData && userData.id && userData.name) {
+        return {
+          success: true,
+          userId: parseInt(userData.id, 10),
+          username: userData.name
+        };
+      }
+    }
+
+    const errorText = await response.text();
+    return {
+      success: false,
+      error: `HTTP ${response.status}: ${errorText || "Unknown error"}`
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message
+    };
+  }
+}
+
+// Helper: Check account eligibility
+async function checkAccountEligibility(cookieToken) {
+  const authResult = await getAuthenticatedUser(cookieToken);
+  if (!authResult.success) {
+    return { success: false, error: authResult.error };
+  }
+
+  try {
+    const response = await fetch(`https://users.roblox.com/v1/users/${authResult.userId}`, {
+      method: "GET",
+      headers: {
+        "Cookie": `.ROBLOSECURITY=${cookieToken}`,
+        "Content-Type": "application/json"
+      }
+    });
+
+    if (response.ok) {
+      const userData = await response.json();
+      const created = userData.created;
+      let accountAge = -1;
+
+      if (created) {
+        const createdDate = new Date(created);
+        const currentDate = new Date();
+        accountAge = Math.floor((currentDate - createdDate) / (24 * 3600 * 1000));
+      }
+
+      return {
+        success: true,
+        userId: authResult.userId,
+        username: authResult.username,
+        accountAge: accountAge,
+        hasVerifiedEmail: userData.hasVerifiedEmail || false,
+        isPremium: userData.isPremium || false
+      };
+    }
+  } catch (err) {
+    // If we can't get detailed info, return basic auth info
+  }
+
+  return {
+    success: true,
+    userId: authResult.userId,
+    username: authResult.username,
+    accountAge: -1,
+    hasVerifiedEmail: false,
+    isPremium: false
+  };
+}
+
+// Helper: Get group information
+async function getGroupInfo(groupId, cookieToken) {
+  try {
+    const response = await fetch(`https://groups.roblox.com/v1/groups/${groupId}`, {
+      method: "GET",
+      headers: {
+        "Cookie": `.ROBLOSECURITY=${cookieToken}`,
+        "Content-Type": "application/json"
+      }
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return { success: true, data: data };
+    }
+
+    const errorText = await response.text();
+    return {
+      success: false,
+      error: `HTTP ${response.status}: ${errorText || "Unknown error"}`
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message
+    };
+  }
+}
+
+// Helper: Transfer group ownership (primary method)
+async function transferGroupOwnership(groupId, newOwnerId, cookieToken, csrfToken) {
+  try {
     const response = await fetch(
-      `https://groups.roblox.com/v1/groups/${groupIdNum}/change-owner`,
+      `https://groups.roblox.com/v1/groups/${groupId}/change-owner`,
       {
         method: "POST",
         headers: {
@@ -153,73 +434,107 @@ export default async function handler(req, res) {
           "X-CSRF-TOKEN": csrfToken,
           "Cookie": `.ROBLOSECURITY=${cookieToken}`
         },
-        body: JSON.stringify({
-          userId: userIdNum,
-        }),
+        body: JSON.stringify({ userId: newOwnerId })
       }
     );
 
-    let responseText = "";
-    let responseData = {};
-    
+    console.log("📡 Transfer request completed");
+    console.log("📊 Status Code:", response.status);
+
+    if (response.ok) {
+      const data = await response.json().catch(() => ({}));
+      return { success: true, data: data };
+    }
+
+    // Enhanced error handling
+    const statusCode = response.status;
+    let errorMessage = "Unknown error";
+
     try {
-      responseText = await response.text();
-      if (responseText) {
-        responseData = JSON.parse(responseText);
+      const errorData = await response.json();
+      if (errorData.errors && errorData.errors[0] && errorData.errors[0].message) {
+        errorMessage = errorData.errors[0].message;
+      } else if (errorData.message) {
+        errorMessage = errorData.message;
       }
     } catch (e) {
-      console.error("[change-group-owner] Response parse error:", e);
-      responseData = { rawResponse: responseText.substring(0, 500) };
+      const errorText = await response.text().catch(() => "");
+      if (errorText) errorMessage = errorText;
     }
 
-    console.log(`[change-group-owner] Response status: ${response.status}`);
-
-    // Handle successful response (200)
-    if (response.status === 200) {
-      console.log("[change-group-owner] Transfer successful!");
-      return res.status(200).json({
-        success: true,
-        message: "Group ownership transferred successfully",
-        groupId: groupIdNum,
-        newOwnerId: userIdNum,
-        responseData,
-        transferredAt: new Date().toISOString(),
-      });
+    // Common HTTP status code meanings
+    if (statusCode === 401) {
+      errorMessage = "Unauthorized - Invalid authentication cookie";
+    } else if (statusCode === 403) {
+      if (errorMessage.includes("Challenge")) {
+        errorMessage = "Challenge Required - This account needs 2FA verification or email confirmation to transfer group ownership. This cannot be bypassed programmatically.";
+      } else if (errorMessage.includes("CSRF")) {
+        errorMessage = "CSRF Token Invalid - Authentication token verification failed";
+      } else if (!errorMessage || errorMessage === "Unknown error") {
+        errorMessage = "Forbidden - Insufficient permissions";
+      }
+    } else if (statusCode === 404) {
+      errorMessage = "Not Found - Group does not exist or user cannot access it";
+    } else if (statusCode === 429) {
+      errorMessage = "Rate Limited - Too many requests, please wait before trying again";
     }
 
-    // Handle common error responses
-    const errorMessages = {
-      400: "Bad request - Invalid groupId or userId format",
-      401: "Unauthorized - Cookie is invalid or expired",
-      403: "Forbidden - You may not have permission to transfer this group, or user is not in the group",
-      404: "Not found - Group or user does not exist",
-      429: "Rate limited - Too many requests, try again later",
-      500: "Roblox server error - Try again later",
-      503: "Roblox service unavailable - Try again later",
+    console.log("📄 Error:", errorMessage);
+
+    return {
+      success: false,
+      error: `HTTP ${statusCode}: ${errorMessage}`,
+      statusCode: statusCode
     };
-
-    console.error(`[change-group-owner] Transfer failed with status ${response.status}:`, responseData);
-
-    return res.status(response.status >= 500 ? 502 : response.status).json({
-      success: false,
-      error: errorMessages[response.status] || `Request failed with status ${response.status}`,
-      status: response.status,
-      responseData,
-      tip: "Check that you are the current group owner and the target user is in the group",
-    });
-
   } catch (err) {
-    console.error("[change-group-owner] Transfer request error:", err);
-    return res.status(500).json({
+    return {
       success: false,
-      error: "Internal server error while changing group owner",
-      details: err.message,
-      tip: "Check your network connection and try again",
-    });
+      error: err.message,
+      statusCode: 0
+    };
   }
 }
 
-// Critical: Disable Vercel's default body parser
+// Helper: Alternative transfer method using v2 endpoint
+async function transferGroupOwnershipAlternative(groupId, newOwnerId, cookieToken, csrfToken) {
+  console.log("🔄 Trying alternative transfer method...");
+
+  try {
+    const response = await fetch(
+      `https://groups.roblox.com/v2/groups/${groupId}/membership/users/${newOwnerId}`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-TOKEN": csrfToken,
+          "Cookie": `.ROBLOSECURITY=${cookieToken}`
+        },
+        body: JSON.stringify({ 
+          role: "Owner",
+          transferOwnership: true 
+        })
+      }
+    );
+
+    if (response.ok || response.status === 204) {
+      return { success: true, data: {} };
+    }
+
+    return { 
+      success: false, 
+      error: "Alternative method failed", 
+      statusCode: response.status 
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message,
+      statusCode: 0
+    };
+  }
+}
+
+// Disable Vercel's default body parser
 export const config = {
   api: {
     bodyParser: false,
