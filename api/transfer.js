@@ -163,9 +163,15 @@ export default async function handler(req, res) {
     }
     console.log("✅ Ownership verified - Player owns the group");
 
-    // STEP 4: Get CSRF token
+    // STEP 4: Get CSRF token (try from target endpoint first for better compatibility)
     console.log("🔐 Step 4: Getting CSRF token...");
-    const csrfResult = await getCSRFToken(cookieToken);
+    const targetEndpoint = {
+      url: `https://groups.roblox.com/v1/groups/${numericGroupId}/change-owner`,
+      method: "POST",
+      body: JSON.stringify({ userId: numericNewOwnerId })
+    };
+    
+    const csrfResult = await getCSRFToken(cookieToken, targetEndpoint);
     
     if (!csrfResult.success) {
       console.log("❌ CSRF token failed:", csrfResult.error);
@@ -241,45 +247,50 @@ export default async function handler(req, res) {
   }
 }
 
-// Helper: Get CSRF token with multiple fallback endpoints
-async function getCSRFToken(cookieToken) {
-  // Try the login endpoint first (most reliable, doesn't log out)
-  try {
-    const response = await fetch("https://auth.roblox.com/v2/login", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Cookie": `.ROBLOSECURITY=${cookieToken}`
-      },
-      body: JSON.stringify({
-        ctype: "Username",
-        cvalue: "",
-        password: ""
-      })
-    });
+// Helper: Get CSRF token - uses the actual endpoint being called for better compatibility
+async function getCSRFToken(cookieToken, targetEndpoint = null) {
+  // BEST METHOD: Make the actual request without CSRF first
+  // Roblox will return the token in the 403 response
+  // This ensures token compatibility with the target endpoint
+  
+  if (targetEndpoint) {
+    try {
+      console.log("🔐 Getting CSRF from target endpoint directly...");
+      const response = await fetch(targetEndpoint.url, {
+        method: targetEndpoint.method || "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Cookie": `.ROBLOSECURITY=${cookieToken}`
+        },
+        body: targetEndpoint.body || "{}"
+      });
 
-    let csrfToken = response.headers.get("x-csrf-token") || 
-                    response.headers.get("X-CSRF-Token") ||
-                    response.headers.get("X-CSRF-TOKEN");
+      // Token is returned in 403 responses
+      let csrfToken = response.headers.get("x-csrf-token") || 
+                      response.headers.get("X-CSRF-Token") ||
+                      response.headers.get("X-CSRF-TOKEN");
 
-    if (csrfToken) {
-      return { success: true, token: csrfToken };
+      if (csrfToken) {
+        console.log("✅ CSRF token obtained from target endpoint");
+        return { success: true, token: csrfToken };
+      }
+    } catch (err) {
+      console.error("Direct CSRF fetch failed:", err.message);
     }
-  } catch (err) {
-    console.error("Primary CSRF endpoint failed:", err.message);
   }
 
-  // Fallback endpoints
+  // Fallback: Use auth endpoints (most reliable)
   const endpoints = [
-    "https://auth.roblox.com/v2/logout",
-    "https://friends.roblox.com/v1/users/1/request-friendship",
-    "https://groups.roblox.com/v1/groups/1/join-requests"
+    { url: "https://auth.roblox.com/v1/logout", method: "POST" },
+    { url: "https://auth.roblox.com/v2/logout", method: "POST" },
+    { url: "https://friends.roblox.com/v1/users/1/request-friendship", method: "POST" },
+    { url: "https://accountsettings.roblox.com/v1/email", method: "POST" }
   ];
 
   for (const endpoint of endpoints) {
     try {
-      const response = await fetch(endpoint, {
-        method: "POST",
+      const response = await fetch(endpoint.url, {
+        method: endpoint.method,
         headers: {
           "Content-Type": "application/json",
           "Cookie": `.ROBLOSECURITY=${cookieToken}`
@@ -292,13 +303,14 @@ async function getCSRFToken(cookieToken) {
                       response.headers.get("X-CSRF-TOKEN");
 
       if (csrfToken) {
+        console.log(`✅ CSRF token obtained from ${endpoint.url}`);
         return { success: true, token: csrfToken };
       }
 
       // Small delay between attempts
       await new Promise(resolve => setTimeout(resolve, 100));
     } catch (err) {
-      console.error(`CSRF endpoint ${endpoint} failed:`, err.message);
+      console.error(`CSRF endpoint ${endpoint.url} failed:`, err.message);
     }
   }
 
