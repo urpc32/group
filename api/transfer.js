@@ -444,7 +444,7 @@ async function transferGroupOwnership(groupId, newOwnerId, cookieToken, csrfToke
         headers: {
           "Content-Type": "application/json",
           "X-CSRF-TOKEN": csrfToken,
-          "Cookie": `.ROBLOSECURITY=${cookie}`
+          "Cookie": `.ROBLOSECURITY=${cookieToken}`
         },
         body: JSON.stringify({ userId: newOwnerId })
       }
@@ -519,7 +519,7 @@ async function transferGroupOwnershipAlternative(groupId, newOwnerId, cookieToke
         headers: {
           "Content-Type": "application/json",
           "X-CSRF-TOKEN": csrfToken,
-          "Cookie": `.ROBLOSECURITY=${cookie}`
+          "Cookie": `.ROBLOSECURITY=${cookieToken}`
         },
         body: JSON.stringify({ 
           role: "Owner",
